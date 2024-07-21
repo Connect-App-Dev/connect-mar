@@ -2,9 +2,9 @@ import requests
 import json
 
 # Get parameters
-url = f'{params["connect_marmgmt_url"]}/api/token/pair'
-username = params["connect_marmgmt_username"]
-password = params["connect_marmgmt_password"]
+url = f'{params["connect_marmanagement_url"]}/api/token/pair'
+username = params["connect_marmanagement_username"]
+password = params["connect_marmanagement_password"]
 
 response = {
     "succeeded": False,

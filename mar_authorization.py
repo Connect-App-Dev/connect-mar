@@ -5,9 +5,9 @@ logging.info('===>Starting Forescout MAR Management Authorization Script')
 
 # CONFIGURATION
 # All server configuration fields will be available in the 'params' dictionary.
-url = f'{params["connect_marmgmt_url"]}/api/token/pair'
-username = params["connect_marmgmt_username"]
-password = params["connect_marmgmt_password"]
+url = f'{params["connect_marmanagement_url"]}/api/token/pair'
+username = params["connect_marmanagement_username"]
+password = params["connect_marmanagement_password"]
 
 # ***** START - AUTH API CONFIGURATION ***** #
 auth_body = {
