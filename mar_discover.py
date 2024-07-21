@@ -1,27 +1,16 @@
 import requests
 import ipaddress
-from datetime import datetime
+import datetime
 import json
 import time
 
 # Get parameters
-username = params["connect_elasticsecurity_kibana_username"]
-password = params["connect_elasticsecurity_kibana_password"]
-ignore_ips = params["connect_elasticsecurity_ignore_ips"]
-ignore_time = int(params["connect_elasticsecurity_ignore_time"])
-recordsPerPage = int(params["connect_elasticsecurity_records_per_page"])
-now = datetime.now()
+base_url = params["connect_marmanagement_url"]
+token = params.get('connect_authorization_token', '')
+recordsPerPage = int(params["connect_marmanagement_records_per_page"])
+now = datetime.datetime.now()
 
-logging.info("===> Elastic Security: Start Host Discovery")
-
-# explode ignore_ips into ip networks
-ip_networks = []
-for ip in ignore_ips.split(","):
-    try: 
-        ip_networks.append(ipaddress.ip_network(ip.strip()))
-    except Exception as e:
-        logging.warning(f'IP Range in connect_elasticsecurity_ignore_ips does not appear to be valid: {ip.strip()}')
-
+logging.info("===> MAR Management: Start Host Discovery")
 
 response = {
     "endpoints": []
@@ -40,110 +29,104 @@ response = {
 page = 0
 totalRecords = recordsPerPage+1 # Force first request to fire; total records will be updated in response request
 retry = 0
-while(page*recordsPerPage < totalRecords and retry < 3):
+while((page+1)*recordsPerPage < totalRecords and retry < 3):
     # Allow 3 tries to make an api request before failing out totally
     retry += 1
-    logging.debug(f'Making endpoint request attempt {retry} for page {page}')
-    url = f'{params["connect_elasticsecurity_kibana_url"]}/api/endpoint/metadata?sortField=last_checkin&pageSize={recordsPerPage}&page={page}&hostStatuses=["healthy", "unhealthy", "updating"]'
+    logging.debug(f'Making MAR request attempt {retry} for offset {page*recordsPerPage}')
+    url = f'{base_url}/api/mar/?limit={recordsPerPage}&offset={page*recordsPerPage}'
     try:
         request = requests.get(
             url,
             verify=ssl_verify,
-            headers={'kbn-xsrf': 'true'},
-            auth=(username, password)
+            headers={'Authorization': f'Bearer {token}'}
         )
 
         if(request.status_code == 200):
             response_json = request.json()
-            logging.debug(f'Endpoint request for page {page} succeded! Received {len(response_json["data"])} records in page. {response_json["total"]} records total to discover.')
+            logging.debug(f'MAR request for offset {page*recordsPerPage} succeded! Received {len(response_json["items"])} records in page. {response_json["count"]} records total to discover.')
             logging.debug(json.dumps(response_json))
             
             # keep track of paging
-            totalRecords = response_json["total"]
+            totalRecords = response_json["count"]
             page += 1
 
-            for agent in response_json['data']:
-                logging.debug("Processing Host: " + agent['metadata']['elastic']['agent']['id'])
-                logging.debug(f'Processing {len(agent["metadata"]["host"]["ip"])} IP addresses on host: {json.dumps(agent["metadata"]["host"]["ip"])}')
-                
-                # Ignore if Last check in time > ignore_time (minutes)
-                last_checkin = datetime.strptime(agent['last_checkin'], '%Y-%m-%dT%H:%M:%S.%fz')
-                minutes = (now-last_checkin).total_seconds() / 60
-                if(minutes > ignore_time):
-                    logging.debug(f'Ignoring IP {ip} -- Agent last check in greater than maximum allowed (connect_elasticsecurity_ignore_time) in app configuration')
-                    continue
+            for entry in response_json['items']:
+                logging.debug("Processing MAR Entry: " + entry['mac'])
 
-                # Discard invalid IPs in host IP list
-                valid_ips = []
-                for ip in agent['metadata']['host']['ip']:
-                    # ignore ip ranges in app configuration exlcude list
-                    if(True in map(lambda network: ipaddress.ip_address(ip) in network, ip_networks)):
-                        logging.debug(f'Ignoring IP {ip} -- Contained in IP Ignore list (connect_elasticsecurity_ignore_ips) in app configuration')
-                        continue
-                    # ignore ipv6, loopback and link local address
-                    if(ipaddress.ip_address(ip).version == 6 or ipaddress.ip_address(ip).is_link_local or ipaddress.ip_address(ip).is_loopback):
-                        logging.debug(f'Ignoring IP {ip} -- Link local or loopback address')
-                        continue
-                    valid_ips.append(ip)
+                # Parse (required fields) time data
+                created_date = datetime.datetime.strptime(entry['created_date'], '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=datetime.timezone.utc)
+                modified_date = datetime.datetime.strptime(entry['modified_date'], '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=datetime.timezone.utc)
+                effective_date = ""
+                if "." in entry['effective_date']:
+                    effective_date = datetime.datetime.strptime(entry['effective_date'], '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=datetime.timezone.utc)
+                else:
+                    effective_date = datetime.datetime.strptime(entry['effective_date'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
 
-                # iterate through valid IPs
-                for ip in valid_ips:
-                    logging.debug(f'Creating host record for {ip}')
-                    # create host record
-                    endpoint = {
-                        "ip": ip,
-                        "properties": {
-                            "connect_elasticsecurity_agent_id": agent['metadata']['elastic']['agent']['id'],
-                            "connect_elasticsecurity_host_status": agent['host_status'],
-                            "connect_elasticsecurity_last_checkin": int(last_checkin.strftime('%s')),
-                            "connect_elasticsecurity_ips": valid_ips,
-                            "connect_elasticsecurity_number_of_ips": len(valid_ips),
-                            "connect_elasticsecurity_macs": list(map(lambda mac: "".join(mac.split("-")), agent['metadata']['host']['mac'])),
-                            "connect_elasticsecurity_number_of_macs": len(agent['metadata']['host']['mac']),
-                            "connect_elasticsecurity_meta_host": {
-                                "hostname": agent['metadata']['host']['hostname'],
-                                "os_variant": agent['metadata']['host']['os']['Ext']['variant'],
-                                "os_kernel": agent['metadata']['host']['os']['kernel'],
-                                "os_name": agent['metadata']['host']['os']['name'],
-                                "os_family": agent['metadata']['host']['os']['family'],
-                                "os_type": agent['metadata']['host']['os']['type'],
-                                "os_version": agent['metadata']['host']['os']['version'],
-                                "os_platform": agent['metadata']['host']['os']['platform'],
-                                "os_full": agent['metadata']['host']['os']['full'],
-                                "architecture": agent['metadata']['host']['architecture']
-                            },
-                            "connect_elasticsecurity_meta_endpoint": {
-                                "capabilities": agent['metadata']['Endpoint']['capabilities'],
-                                "configuration_isolation": agent['metadata']['Endpoint']['configuration']['isolation'],
-                                "state_isolation": agent['metadata']['Endpoint']['state']['isolation'],
-                                "policy_name": agent['metadata']['Endpoint']['policy']['applied']['name'],
-                                "policy_endpoint_policy_version": agent['metadata']['Endpoint']['policy']['applied']['endpoint_policy_version'],
-                                "policy_version": agent['metadata']['Endpoint']['policy']['applied']['version'],
-                                "policy_status": agent['metadata']['Endpoint']['policy']['applied']['status'],
-                                "status": agent['metadata']['Endpoint']['status']
-                            },
-                            "connect_elasticsecurity_meta_agent": {
-                                "build": agent['metadata']['agent']['build']['original'],
-                                "type": agent['metadata']['agent']['type'],
-                                "version": agent['metadata']['agent']['version']
-                            }
-                        }
+                # create host record
+                endpoint = {
+                    "mac": entry['mac'],
+                    "properties": {
+                        "connect_marmanagement_entry_mac": True,
+                        "connect_marmanagement_entry_last_seen": int(now.strftime('%s')),
+                        "connect_marmanagement_entry_created": int(created_date.strftime('%s')),
+                        "connect_marmanagement_entry_created_by": entry['created_by']['username'],
+                        "connect_marmanagement_entry_modified": int(modified_date.strftime('%s')),
+                        "connect_marmanagement_entry_modified_by": entry['modified_by']['username'],
+                        "connect_marmanagement_entry_effective": int(effective_date.strftime('%s')),
                     }
-                    # Set mac address if only 1 mac present
-                    if(len(agent['metadata']['host']['mac']) == 1):
-                        endpoint["mac"] = "".join(agent['metadata']['host']['mac'][0].split("-"))
-                    # Create host in response
-                    # logging.debug(json.dumps(endpoint))
-                    response['endpoints'].append(endpoint)
+                }
+
+                # Add Properties if exist
+                if entry['comment']:
+                    endpoint["properties"]["connect_marmanagement_entry_comment"] = entry['comment']
+                if entry['mar_comment']:
+                    endpoint["properties"]["connect_marmanagement_entry_mar_comment"] = entry['mar_comment']
+                if entry['group']:
+                    endpoint["properties"]["connect_marmanagement_entry_group"] = {
+                        "id": entry['group']['id'],
+                        "name": entry['group']['name']
+                    }
+                if entry['template']:
+                    endpoint["properties"]["connect_marmanagement_entry_template"] = {
+                        "id": entry['template']['id'],
+                        "name": entry['template']['name']
+                    }
+                if entry['category']:
+                    endpoint["properties"]["connect_marmanagement_entry_category"] = {
+                        "id": entry['category']['id'],
+                        "name": entry['category']['name']
+                    }
+                if entry.get("authorization_parameters", False):
+                    endpoint["properties"]["connect_marmanagement_entry_auth_params"] = {
+                        "deny": entry.get('deny', False)
+                    }
+                    if entry.get('vlan_num', False):
+                        endpoint["properties"]["connect_marmanagement_entry_auth_params"]["vlan_num"] = entry.get('vlan_num')
+                    if entry.get('vlan_name', False):
+                        endpoint["properties"]["connect_marmanagement_entry_auth_params"]["vlan_name"] = entry.get('vlan_name')
+                if entry.get("expire_date", False):
+                    expire_date = ""
+                    if "." in entry['expire_date']:
+                        expire_date = datetime.datetime.strptime(entry['expire_date'], '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=datetime.timezone.utc)
+                    else:
+                        expire_date = datetime.datetime.strptime(entry['expire_date'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
+                    endpoint["properties"]["connect_marmanagement_entry_expire"] = int(expire_date.strftime('%s'))
+                    endpoint["properties"]["connect_marmanagement_entry_has_expiration"] = True
+                else:
+                    endpoint["properties"]["connect_marmanagement_entry_has_expiration"] = False
+
+                # Create host in response
+                # logging.debug(json.dumps(endpoint))
+                response['endpoints'].append(endpoint)
                 # Reset retry tracker
                 retry = 0
         else:
             logging.error("API Status code error: " + json.dumps(request.json()))
             time.sleep(retry * 0.2) # Delay retry
     except Exception as e:
-        logging.error(f'Endpoint request for page {page}  failed: + {str(e)}')
+        logging.error(f'Endpoint request for offset {page*recordsPerPage} failed: + {str(e)}')
         response["error"] = str(e)
         time.sleep(retry * 0.2) # Delay retry
 
-logging.info("===> Elastic Security: End Host Discovery")
+logging.info("===> MAR Management: End Host Discovery")
 # print(json.dumps(response['endpoints']))

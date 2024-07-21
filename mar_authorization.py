@@ -1,7 +1,7 @@
 import requests
 import logging
 
-logging.info('===>Starting Forescout MAR Management Authorization Script')
+logging.info('===>Starting MAR Management Authorization Script')
 
 # CONFIGURATION
 # All server configuration fields will be available in the 'params' dictionary.
@@ -23,7 +23,7 @@ try:
     # Make the API Call
     resp = requests.post(
         url,
-        json=payload,
+        json=auth_body,
         verify=ssl_verify,
         headers={'accept': 'application/json', 'Content-Type': 'application/json'},
     )
@@ -32,26 +32,26 @@ try:
 
     if resp is None:
         response['succeeded'] = False
-        response['result_msg'] = 'No response from Forescout MAR Management. Please check URL and service status.'
+        response['result_msg'] = 'No response from MAR Management. Please check URL and service status.'
     elif resp.status_code == 200:
         response['succeeded'] = True
         response["token"] = resp.json()["access"]
-        response['result_msg'] = f'Successfully connected to Forescout MAR Management and acquired JWT.'
+        response['result_msg'] = f'Successfully connected to MAR Management and acquired JWT.'
     elif resp.status_code == 401:
         response['succeeded'] = False
-        response['error'] = f'Error Code {resp.status_code} received from Forescout MAR Management. Please check credentials!'
+        response['error'] = f'Error Code {resp.status_code} received from MAR Management. Please check credentials!'
         logging.debug(resp.content)
     else:
         response['succeeded'] = False
-        response['error'] = f'Error Code {resp.status_code} received Forescout MAR Management.'
+        response['error'] = f'Error Code {resp.status_code} received MAR Management.'
         logging.debug(resp.content)
 
 except Exception as e:
     response['succeeded'] = False
     response['token'] = ''
-    response['error'] = "Could not connect to Forescout MAR Management. Exception: " + str(e)
-    response['result_msg'] = "Could not connect to Forescout MAR Management. Exception: " + str(e)
+    response['error'] = "Could not connect to MAR Management. Exception: " + str(e)
+    response['result_msg'] = "Could not connect to MAR Management. Exception: " + str(e)
 
 # logging response for debugging purposes - you might disable this option later.
 # logging.debug(f'Authorization Script Returned Response: {response}')
-logging.info('===>Ending Forescout MAR Management Authorization Script')
+logging.info('===>Ending MAR Management Authorization Script')
